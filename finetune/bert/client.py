@@ -12,7 +12,7 @@ from sklearn.metrics import accuracy_score
 
 class Client:
     def __init__(self, model_checkpoint, dataset_path, val_dataset_path, lora_r, lora_alpha, target_modules, 
-                 training_type, dataset_type, device='cpu'):
+                 training_type, dataset_type, device='cpu', batch_size=128):
         """
         Initializes the Client for model training with specified configurations.
 
@@ -26,6 +26,7 @@ class Client:
             training_type (str): Type of training ('LoRA' or 'ConLoRA').
             dataset_type (str): Type of dataset ('sst2', 'mnli', or 'qnli').
             device (str): Device for training ('cpu' or 'cuda').
+            batch_size (int): Batch size for the DataLoader.
         """
         self.device = device
         self.lora_r = lora_r
@@ -34,6 +35,7 @@ class Client:
         self.dataset_type = dataset_type
         self.dataset = load_from_disk(dataset_path)
         self.raw_val_dataset = load_dataset(val_dataset_path)
+        self.batch_size = batch_size  # Save batch size as an instance variable
 
         # Determine number of labels based on dataset type
         self.num_labels = self._get_num_labels()
@@ -101,7 +103,7 @@ class Client:
         """
         tokenized_dataset = dataset.map(self.tokenize_function, batched=True)
         tokenized_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
-        return DataLoader(tokenized_dataset, batch_size=16, collate_fn=self.data_collator)
+        return DataLoader(tokenized_dataset, batch_size=self.batch_size, collate_fn=self.data_collator)
 
     def configure_model(self, target_modules):
         """
@@ -215,6 +217,75 @@ class Client:
             if param.requires_grad:
                 trainable_params[name] = (param.clone().detach(), param.requires_grad)
         return trainable_params
+    
+    def get_lora_parameters(self):
+        """
+        Returns the parameters associated with LoRA layers.
+        
+        LoRA parameters typically include layers with names containing 'lora_A' or 'lora_B'.
+        
+        Returns:
+            dict: A dictionary with parameter names as keys and their respective values (cloned and detached) as values.
+        """
+        lora_params = {}
+        for name, param in self.model.named_parameters():
+            if "lora_A" in name or "lora_B" in name:
+                # Clone the parameter and preserve the 'requires_grad' property
+                lora_params[name] = (param.clone().detach(), param.requires_grad)
+        return lora_params
+    
+    def get_all_parameters(self):
+        """
+        Returns all parameters of the model, including their names and whether they require gradients.
+
+        Returns:
+            dict: A dictionary with parameter names as keys and tuples of (cloned parameter, requires_grad) as values.
+        """
+        all_params = {}
+        for name, param in self.model.named_parameters():
+            all_params[name] = (param.clone().detach(), param.requires_grad)
+        return all_params
+    
+    def get_last_2_layers(self):
+        """
+        Returns the parameters for the last two layers of the model, typically the classification layers.
+
+        These layers are often named 'pre_classifier' and 'classifier'.
+        
+        Returns:
+            dict: A dictionary with parameter names as keys and their respective values (cloned and detached) as values.
+        """
+        last_2_layers_params = {}
+        for name, param in self.model.named_parameters():
+            if "pre_classifier" in name or "classifier" in name:
+                last_2_layers_params[name] = (param.clone().detach(), param.requires_grad)
+        return last_2_layers_params
+    
+    def get_lora_A(self):
+        """
+        Returns the parameters for the 'lora_A' layers in the model.
+        
+        Returns:
+            dict: A dictionary with parameter names as keys and their respective values (cloned and detached) as values.
+        """
+        lora_A_params = {}
+        for name, param in self.model.named_parameters():
+            if "lora_A" in name:
+                lora_A_params[name] = (param.clone().detach(), param.requires_grad)
+        return lora_A_params
+    
+    def set_trainable_parameters(self, trainable_params):
+        """
+        Sets the trainable parameters for the model based on the provided parameters.
+
+        Args:
+            trainable_params (dict): A dictionary with parameter names as keys and tuples of (parameter, requires_grad) as values.
+        """
+        for name, (param, requires_grad) in trainable_params.items():
+            if name in dict(self.model.named_parameters()):
+                current_param = dict(self.model.named_parameters())[name]
+                current_param.data = param.clone().to(self.device)
+                current_param.requires_grad = requires_grad
 
 
 def main():
@@ -229,6 +300,7 @@ def main():
     parser.add_argument('--num_epochs', type=int, default=5, help="Number of epochs to train (default: 5).")
     parser.add_argument('--val_dataset_path', type=str, required=True, help="Path to the validation dataset.")
     parser.add_argument('--dataset_type', type=str, choices=['sst2', 'mnli', 'qnli'], required=True, help="Type of dataset.")
+    parser.add_argument('--batch_size', type=int, default=128, help="Batch size for training.")
 
     args = parser.parse_args()
 
@@ -244,7 +316,8 @@ def main():
         training_type=args.training_type,
         target_modules=target_modules,
         device=args.device,
-        dataset_type=args.dataset_type
+        dataset_type=args.dataset_type,
+        batch_size=args.batch_size  # Pass batch_size from arguments
     )
 
     # Training loop

@@ -34,6 +34,9 @@ NUM_EPOCHS=10
 # Dataset type (e.g., "sst2", "mnli", "qnli")
 DATASET_TYPE="sst2"
 
+# Number of epochs for training
+BATCH_SIZE=64  
+
 # ========================================================================
 # Validate input parameters
 # ========================================================================
@@ -72,6 +75,7 @@ python3 client.py \
   --target_modules "$TARGET_MODULES" \
   --device "$DEVICE" \
   --num_epochs "$NUM_EPOCHS" \
-  --dataset_type "$DATASET_TYPE"
+  --dataset_type "$DATASET_TYPE" \
+  --batch_size "$BATCH_SIZE"
 
 echo "Training has completed!"
